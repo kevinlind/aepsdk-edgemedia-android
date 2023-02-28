@@ -13,6 +13,8 @@ package com.adobe.marketing.mobile.media.internal;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
+
 import com.adobe.marketing.mobile.Event;
 import com.adobe.marketing.mobile.EventSource;
 import com.adobe.marketing.mobile.EventType;
@@ -24,7 +26,11 @@ import com.adobe.marketing.mobile.SharedStateResult;
 import com.adobe.marketing.mobile.SharedStateStatus;
 import com.adobe.marketing.mobile.services.Log;
 import com.adobe.marketing.mobile.util.DataReader;
+import com.adobe.marketing.mobile.util.MapUtils;
+import com.adobe.marketing.mobile.util.StringUtils;
+
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class MediaExtension extends Extension {
@@ -36,9 +42,13 @@ public class MediaExtension extends Extension {
     MediaRealTimeService mediaRealTimeService;
     MediaOfflineService mediaOfflineService;
 
+    @VisibleForTesting
+    protected MediaEventProcessor mediaEventProcessor;
+
     MediaExtension(final ExtensionApi extensionApi) {
         super(extensionApi);
         trackers = new HashMap<>();
+        mediaEventProcessor = new MediaEventProcessor();
     }
 
     @NonNull @Override
@@ -78,6 +88,8 @@ public class MediaExtension extends Extension {
                         EventType.MEDIA,
                         MediaInternalConstants.Media.EVENT_SOURCE_TRACK_MEDIA,
                         this::handleMediaTrackEvent);
+        getApi().registerEventListener(EventType.EDGE, MediaInternalConstants.Media.EVENT_SOURCE_MEDIA_EDGE_SESSION, this::handleMediaEdgeSessionDetails);
+        getApi().registerEventListener(EventType.EDGE, MediaInternalConstants.Media.EVENT_SOURCE_EDGE_ERROR_RESOURCE, this::handleEdgeErrorResponse);
 
         // Retrieve latest shared state updates
         notifySharedStateUpdate(MediaInternalConstants.Configuration.SHARED_STATE_NAME, null);
@@ -92,6 +104,30 @@ public class MediaExtension extends Extension {
         mediaOfflineService = null;
         mediaRealTimeService.destroy();
         mediaRealTimeService = null;
+    }
+
+    void handleMediaEdgeSessionDetails(@NonNull final Event event) {
+        String requestEventId = DataReader.optString(event.getEventData(), MediaInternalConstants.Edge.REQUEST_EVENT_ID, null);
+        if (StringUtils.isNullOrEmpty(requestEventId)) {
+            return;
+        }
+
+        String backendSessionId = null; // session id is null if either 'payload' or 'sessionid' is null
+        List<Map<String, Object>> payload = DataReader.optTypedListOfMap(Object.class, event.getEventData(), MediaInternalConstants.Edge.PAYLOAD, null);
+        if (payload != null && !payload.isEmpty()) {
+            backendSessionId = DataReader.optString(payload.get(0), MediaInternalConstants.Edge.SESSION_ID, null);
+        }
+
+        mediaEventProcessor.notifyBackendSessionId(requestEventId, backendSessionId);
+    }
+
+    void handleEdgeErrorResponse(@NonNull final Event event) {
+        String requestEventId = DataReader.optString(event.getEventData(), MediaInternalConstants.Edge.REQUEST_EVENT_ID, null);
+        if (StringUtils.isNullOrEmpty(requestEventId)) {
+            return;
+        }
+
+        mediaEventProcessor.notifyErrorResponse(requestEventId, event.getEventData());
     }
 
     void handleSharedStateUpdate(final Event event) {
